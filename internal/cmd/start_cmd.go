@@ -27,5 +27,6 @@ func NewStartCommand() *cobra.Command {
 	result.AddCommand(NewStartControllerCommand())
 	result.AddCommand(NewStartRestGatewayCommand())
 	result.AddCommand(NewStartGrpcServerCommand())
+	result.AddCommand(NewConsoleProxyCommand())
 	return result
 }

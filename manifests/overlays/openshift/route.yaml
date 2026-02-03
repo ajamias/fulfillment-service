@@ -23,3 +23,18 @@ spec:
     targetPort: api
   tls:
     termination: passthrough
+
+---
+
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: fulfillment-console
+spec:
+  to:
+    kind: Service
+    name: fulfillment-api
+  port:
+    targetPort: console
+  tls:
+    termination: passthrough

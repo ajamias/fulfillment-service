@@ -49,6 +49,9 @@ spec:
         - name: api
           protocol: TCP
           containerPort: 8000
+        - name: console
+          protocol: TCP
+          containerPort: 8001
         - name: metrics
           protocol: TCP
           containerPort: 8002
