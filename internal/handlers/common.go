@@ -18,33 +18,71 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"google.golang.org/grpc/metadata"
 )
 
-// CreateGrpcContextFromHttpRequest converts HTTP request headers to gRPC metadata context
-// This is shared functionality used by all console handlers to forward authentication
-// and other important headers to the gRPC server for proper authorization.
-func CreateGrpcContextFromHttpRequest(r *http.Request) context.Context {
-	md := metadata.MD{}
+func ExtractAuthToken(r *http.Request) (string, error) {
+	authHeaderValue := r.Header.Get("Authorization")
 
-	// Extract and properly format Authorization header
-	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-		md.Set("authorization", authHeader)
+	authHeaderValue = strings.TrimSpace(authHeaderValue)
+	if authHeaderValue == "" {
+		return "", errors.New("Unauthorized: Missing Authorization header")
 	}
 
-	// Set required gRPC content-type
-	md.Set("content-type", "application/grpc")
-
-	// Forward essential headers that are safe for gRPC
-	essentialHeaders := []string{"user-agent", "x-request-id", "x-forwarded-proto"}
-	for _, headerName := range essentialHeaders {
-		if values := r.Header[headerName]; len(values) > 0 {
-			md.Set(strings.ToLower(headerName), values[0])
-		}
+	splitToken = strings.Slice(authHeaderValue, "Bearer ")
+	if len(splitToken) != 2 {
+		return "", errors.New("Unauthorized: Invalid authorization scheme")
 	}
 
+	return splitToken[1], nil
+}
+
+func NewGrpcContextFromRequest(r *http.Request, token string) context.Context {
+	md := metadata.New(map[string]string{
+		"authorization": token,
+		"content-type":  "application/grpc",
+		"user-agent":    r.Header.Get("user-agent"),
+	})
 	return metadata.NewOutgoingContext(r.Context(), md)
+}
+
+func CreateTunnel(client net.Conn, console net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Copy from client to console
+	go func() {
+		defer wg.Done()
+		defer console.Close()
+
+		_, err := io.Copy(console, client)
+		if err == nil {
+			h.logger.InfoContext(ctx, "Client disconnected")
+		} else if err != io.EOF {
+			h.logger.DebugContext(ctx, "Connection closed", slog.Any("error", err))
+		}
+	}()
+
+	// Copy from console to client
+	go func() {
+		defer wg.Done()
+		defer client.Close()
+
+		_, err := io.Copy(clientConn, consoleConn)
+		if err == nil {
+			h.logger.InfoContext(ctx, "Console disconnected")
+		} else if err != io.EOF {
+			h.logger.DebugContext(ctx, "Connection closed", slog.Any("error", err))
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestEcho(client net.Conn) {
+
 }

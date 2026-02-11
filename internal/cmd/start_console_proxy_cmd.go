@@ -183,8 +183,8 @@ func (c *startConsoleProxyCommandRunner) run(cmd *cobra.Command, argv []string) 
 
 	// Add the console endpoints
 	c.logger.InfoContext(ctx, "Adding console endpoints")
-	mux.HandleFunc("POST /console/host/{id}", c.hostConsoleHandler.HandleConsole)
-	mux.HandleFunc("POST /console/computeinstance/{id}", c.computeInstanceConsoleHandler.HandleConsole)
+	mux.HandleFunc("POST /api/fulfillment/v1/hosts/{id}/console", c.hostConsoleHandler.HandleConsole)
+	mux.HandleFunc("POST /api/fulfillment/v1/compute_instances/{id}/console", c.computeInstanceConsoleHandler.HandleConsole)
 
 	// Add the health endpoint
 	c.logger.InfoContext(ctx, "Adding health endpoint")

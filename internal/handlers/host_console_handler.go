@@ -87,29 +87,13 @@ func (h *HostConsoleHandler) HandleConsole(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Extract the Authorization header and token
-	authHeaderValue := r.Header.Get("Authorization")
-	if authHeaderValue == "" {
-		http.Error(w, "Unauthorized: Missing Authorization header", http.StatusUnauthorized)
-		return
-	}
-	if !strings.HasPrefix(authHeaderValue, "Bearer ") {
-		http.Error(w, "Unauthorized: Invalid authorization scheme", http.StatusUnauthorized)
+	token, err := ExtractAuthToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
-	// Create gRPC context with the extracted token
-	md := metadata.New(map[string]string{
-		"authorization": authHeaderValue,
-		"content-type":  "application/grpc",
-		"user-agent":    r.Header.Get("user-agent"),
-	})
-	grpcCtx := metadata.NewOutgoingContext(ctx, md)
-
-	// Debug: Print what metadata we're sending to gRPC
-	h.logger.InfoContext(ctx, "gRPC metadata created", "metadata", md)
-
-	// Verify host access
+	grpcCtx := NewGrpcContextFromRequest(r, token)
 	response, err := h.hostsClient.Get(grpcCtx, &fulfillmentv1.HostsGetRequest{Id: id})
 	if err != nil {
 		h.logger.ErrorContext(
@@ -218,42 +202,8 @@ func (h *HostConsoleHandler) HandleConsole(w http.ResponseWriter, r *http.Reques
 		h.logger.InfoContext(ctx, "Console connection closed")
 	}
 
-	h.logger.InfoContext(ctx, "Console tunnel established",
-		slog.String("console_endpoint", consoleEndpoint))
+	h.logger.InfoContext(ctx, "Connected to console", slog.String("console_endpoint", consoleEndpoint))
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Copy from client to console
-	go func() {
-		defer wg.Done()
-		defer consoleConn.Close()
-
-		bytes, err := io.Copy(consoleConn, clientConn)
-		if err == nil {
-			h.logger.InfoContext(ctx, "Client disconnected")
-		} else if err != io.EOF {
-			h.logger.DebugContext(ctx, "Connection closed",
-				slog.Any("error", err),
-				slog.Int64("bytes_copied", bytes))
-		}
-	}()
-
-	// Copy from console to client
-	go func() {
-		defer wg.Done()
-		defer clientConn.Close()
-
-		bytes, err := io.Copy(clientConn, consoleConn)
-		if err == nil {
-			h.logger.InfoContext(ctx, "Console disconnected")
-		} else if err != io.EOF {
-			h.logger.DebugContext(ctx, "Connection closed",
-				slog.Any("error", err),
-				slog.Int64("bytes_copied", bytes))
-		}
-	}()
-
-	wg.Wait()
+	CreateTunnel(clientConn, consoleConn)
 	*/
 }
