@@ -30,3 +30,12 @@ var HostUuid = fmt.Sprintf("%s/%s", gvks.Host.Group, "host-uuid")
 
 // HostPoolUuid is the label where the fulfillment API will write the identifier of the host pool.
 var HostPoolUuid = fmt.Sprintf("%s/%s", gvks.HostPool.Group, "hostpool-uuid")
+
+// SubnetUuid is the label where the fulfillment API will write the identifier of the subnet.
+var SubnetUuid = fmt.Sprintf("%s/%s", gvks.Subnet.Group, "subnet-uuid")
+
+// VirtualNetworkUuid is the label where the fulfillment API will write the identifier of the virtual network.
+var VirtualNetworkUuid = fmt.Sprintf("%s/%s", gvks.VirtualNetwork.Group, "virtualnetwork-uuid")
+
+// NetworkClassUuid is the label where the fulfillment API will write the identifier of the network class.
+var NetworkClassUuid = fmt.Sprintf("%s/%s", gvks.NetworkClass.Group, "networkclass-uuid")

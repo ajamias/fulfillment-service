@@ -1,0 +1,359 @@
+/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/
+
+package servers
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net"
+
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+
+	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/fulfillment-service/internal/auth"
+	"github.com/osac-project/fulfillment-service/internal/database"
+	"github.com/osac-project/fulfillment-service/internal/database/dao"
+)
+
+type PrivateSubnetsServerBuilder struct {
+	logger           *slog.Logger
+	notifier         *database.Notifier
+	attributionLogic auth.AttributionLogic
+	tenancyLogic     auth.TenancyLogic
+}
+
+var _ privatev1.SubnetsServer = (*PrivateSubnetsServer)(nil)
+
+type PrivateSubnetsServer struct {
+	privatev1.UnimplementedSubnetsServer
+
+	logger            *slog.Logger
+	generic           *GenericServer[*privatev1.Subnet]
+	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
+}
+
+func NewPrivateSubnetsServer() *PrivateSubnetsServerBuilder {
+	return &PrivateSubnetsServerBuilder{}
+}
+
+func (b *PrivateSubnetsServerBuilder) SetLogger(value *slog.Logger) *PrivateSubnetsServerBuilder {
+	b.logger = value
+	return b
+}
+
+func (b *PrivateSubnetsServerBuilder) SetNotifier(value *database.Notifier) *PrivateSubnetsServerBuilder {
+	b.notifier = value
+	return b
+}
+
+func (b *PrivateSubnetsServerBuilder) SetAttributionLogic(value auth.AttributionLogic) *PrivateSubnetsServerBuilder {
+	b.attributionLogic = value
+	return b
+}
+
+func (b *PrivateSubnetsServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *PrivateSubnetsServerBuilder {
+	b.tenancyLogic = value
+	return b
+}
+
+func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err error) {
+	// Check parameters:
+	if b.logger == nil {
+		err = errors.New("logger is mandatory")
+		return
+	}
+	if b.tenancyLogic == nil {
+		err = errors.New("tenancy logic is mandatory")
+		return
+	}
+
+	// Create the VirtualNetwork DAO for parent validation:
+	virtualNetworkDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(b.logger).
+		SetTable("virtual_networks").
+		SetAttributionLogic(b.attributionLogic).
+		SetTenancyLogic(b.tenancyLogic).
+		Build()
+	if err != nil {
+		return
+	}
+
+	// Create the generic server:
+	generic, err := NewGenericServer[*privatev1.Subnet]().
+		SetLogger(b.logger).
+		SetService(privatev1.Subnets_ServiceDesc.ServiceName).
+		SetTable("subnets").
+		SetNotifier(b.notifier).
+		SetAttributionLogic(b.attributionLogic).
+		SetTenancyLogic(b.tenancyLogic).
+		Build()
+	if err != nil {
+		return
+	}
+
+	// Create and populate the object:
+	result = &PrivateSubnetsServer{
+		logger:            b.logger,
+		generic:           generic,
+		virtualNetworkDao: virtualNetworkDao,
+	}
+	return
+}
+
+func (s *PrivateSubnetsServer) List(ctx context.Context,
+	request *privatev1.SubnetsListRequest) (response *privatev1.SubnetsListResponse, err error) {
+	err = s.generic.List(ctx, request, &response)
+	return
+}
+
+func (s *PrivateSubnetsServer) Get(ctx context.Context,
+	request *privatev1.SubnetsGetRequest) (response *privatev1.SubnetsGetResponse, err error) {
+	err = s.generic.Get(ctx, request, &response)
+	return
+}
+
+// SUB-SVC-01: Create creates a new Subnet with validation
+func (s *PrivateSubnetsServer) Create(ctx context.Context,
+	request *privatev1.SubnetsCreateRequest) (response *privatev1.SubnetsCreateResponse, err error) {
+	subnet := request.GetObject()
+
+	// Validate before creating:
+	err = s.validateSubnet(ctx, subnet, nil)
+	if err != nil {
+		return
+	}
+
+	// SUB-VAL-10: Set owner reference annotation automatically
+	if subnet.GetMetadata() == nil {
+		subnet.Metadata = &privatev1.Metadata{}
+	}
+	if subnet.GetMetadata().GetAnnotations() == nil {
+		subnet.Metadata.Annotations = make(map[string]string)
+	}
+	subnet.Metadata.Annotations["osac.io/owner-reference"] = subnet.GetSpec().GetVirtualNetwork()
+
+	err = s.generic.Create(ctx, request, &response)
+	return
+}
+
+// SUB-SVC-04: Update updates an existing Subnet with validation
+func (s *PrivateSubnetsServer) Update(ctx context.Context,
+	request *privatev1.SubnetsUpdateRequest) (response *privatev1.SubnetsUpdateResponse, err error) {
+	// Get existing object for immutability validation:
+	id := request.GetObject().GetId()
+	if id == "" {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
+		return
+	}
+
+	getRequest := &privatev1.SubnetsGetRequest{}
+	getRequest.SetId(id)
+	var getResponse *privatev1.SubnetsGetResponse
+	err = s.generic.Get(ctx, getRequest, &getResponse)
+	if err != nil {
+		return
+	}
+
+	existingSubnet := getResponse.GetObject()
+
+	// Validate with existing object context:
+	err = s.validateSubnet(ctx, request.GetObject(), existingSubnet)
+	if err != nil {
+		return
+	}
+
+	err = s.generic.Update(ctx, request, &response)
+	return
+}
+
+func (s *PrivateSubnetsServer) Delete(ctx context.Context,
+	request *privatev1.SubnetsDeleteRequest) (response *privatev1.SubnetsDeleteResponse, err error) {
+	err = s.generic.Delete(ctx, request, &response)
+	return
+}
+
+func (s *PrivateSubnetsServer) Signal(ctx context.Context,
+	request *privatev1.SubnetsSignalRequest) (response *privatev1.SubnetsSignalResponse, err error) {
+	err = s.generic.Signal(ctx, request, &response)
+	return
+}
+
+// validateSubnet validates the Subnet object.
+func (s *PrivateSubnetsServer) validateSubnet(ctx context.Context,
+	newSubnet *privatev1.Subnet, existingSubnet *privatev1.Subnet) error {
+
+	if newSubnet == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "subnet is mandatory")
+	}
+
+	spec := newSubnet.GetSpec()
+	if spec == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "subnet spec is mandatory")
+	}
+
+	// SUB-VAL-03: At least one CIDR must be provided
+	if spec.GetIpv4Cidr() == "" && spec.GetIpv6Cidr() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"at least one of 'spec.ipv4_cidr' or 'spec.ipv6_cidr' must be provided")
+	}
+
+	// SUB-VAL-01: Validate IPv4 CIDR format
+	if spec.GetIpv4Cidr() != "" {
+		if err := validateCIDR(spec.GetIpv4Cidr(), "IPv4"); err != nil {
+			return err
+		}
+	}
+
+	// SUB-VAL-02: Validate IPv6 CIDR format
+	if spec.GetIpv6Cidr() != "" {
+		if err := validateCIDR(spec.GetIpv6Cidr(), "IPv6"); err != nil {
+			return err
+		}
+	}
+
+	// SUB-VAL-11: Check immutable fields (only on Update)
+	if err := validateImmutableFieldsSubnet(newSubnet, existingSubnet); err != nil {
+		return err
+	}
+
+	// SUB-VAL-04, SUB-VAL-05, SUB-VAL-06, SUB-VAL-07, SUB-VAL-08: Validate parent VirtualNetwork
+	// Only validate on Create or if virtual_network changed (though it shouldn't on Update)
+	if existingSubnet == nil || spec.GetVirtualNetwork() != existingSubnet.GetSpec().GetVirtualNetwork() {
+		if err := s.validateVirtualNetworkReference(ctx, spec); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateCIDRSubset validates that subnetCIDR is a proper subset of parentCIDR.
+func validateCIDRSubset(subnetCIDR string, parentCIDR string, ipVersion string) error {
+	// Parse subnet CIDR
+	_, subnetNetwork, err := net.ParseCIDR(subnetCIDR)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"invalid subnet %s CIDR format '%s': %v", ipVersion, subnetCIDR, err)
+	}
+
+	// Parse parent CIDR
+	_, parentNetwork, err := net.ParseCIDR(parentCIDR)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"invalid parent %s CIDR format '%s': %v", ipVersion, parentCIDR, err)
+	}
+
+	// Check parent contains subnet network address
+	if !parentNetwork.Contains(subnetNetwork.IP) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"subnet %s CIDR '%s' is not within parent VirtualNetwork CIDR '%s'",
+			ipVersion, subnetCIDR, parentCIDR)
+	}
+
+	// Check subnet mask is more specific than parent mask (prevents subnet larger than parent)
+	subnetMaskSize, _ := subnetNetwork.Mask.Size()
+	parentMaskSize, _ := parentNetwork.Mask.Size()
+	if subnetMaskSize < parentMaskSize {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"subnet %s CIDR '%s' (/%d) is less specific than parent CIDR '%s' (/%d)",
+			ipVersion, subnetCIDR, subnetMaskSize, parentCIDR, parentMaskSize)
+	}
+
+	return nil
+}
+
+// validateVirtualNetworkReference validates that the referenced VirtualNetwork exists, is in READY state,
+// and has matching IP families.
+func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Context,
+	spec *privatev1.SubnetSpec) error {
+
+	virtualNetworkID := spec.GetVirtualNetwork()
+	if virtualNetworkID == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.virtual_network' is required")
+	}
+
+	// SUB-VAL-04: Get parent VirtualNetwork by ID
+	getResponse, err := s.virtualNetworkDao.Get().
+		SetId(virtualNetworkID).
+		Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"parent VirtualNetwork '%s' does not exist", virtualNetworkID)
+		}
+		s.logger.ErrorContext(ctx, "Failed to query VirtualNetwork",
+			slog.String("virtual_network_id", virtualNetworkID),
+			slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate virtual_network")
+	}
+
+	virtualNetwork := getResponse.GetObject()
+
+	// SUB-VAL-05: Check parent VirtualNetwork is READY
+	if virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"parent VirtualNetwork '%s' is not in READY state (current state: %s)",
+			virtualNetworkID, virtualNetwork.GetStatus().GetState().String())
+	}
+
+	parentSpec := virtualNetwork.GetSpec()
+
+	// SUB-VAL-07: Validate IPv4 CIDR only if parent has IPv4
+	if spec.GetIpv4Cidr() != "" {
+		if parentSpec.GetIpv4Cidr() == "" {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"subnet has IPv4 CIDR but parent VirtualNetwork does not support IPv4")
+		}
+		// SUB-VAL-06: Validate IPv4 CIDR is subset of parent
+		if err := validateCIDRSubset(spec.GetIpv4Cidr(), parentSpec.GetIpv4Cidr(), "IPv4"); err != nil {
+			return err
+		}
+	}
+
+	// SUB-VAL-08: Validate IPv6 CIDR only if parent has IPv6
+	if spec.GetIpv6Cidr() != "" {
+		if parentSpec.GetIpv6Cidr() == "" {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"subnet has IPv6 CIDR but parent VirtualNetwork does not support IPv6")
+		}
+		// SUB-VAL-06: Validate IPv6 CIDR is subset of parent
+		if err := validateCIDRSubset(spec.GetIpv6Cidr(), parentSpec.GetIpv6Cidr(), "IPv6"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateImmutableFieldsSubnet validates that immutable fields have not been changed.
+func validateImmutableFieldsSubnet(newSubnet *privatev1.Subnet, existingSubnet *privatev1.Subnet) error {
+	if existingSubnet == nil {
+		return nil // Create operation, no immutability checks
+	}
+
+	newSpec := newSubnet.GetSpec()
+	existingSpec := existingSubnet.GetSpec()
+
+	// Check immutable virtual_network field
+	if newSpec.GetVirtualNetwork() != existingSpec.GetVirtualNetwork() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.virtual_network' is immutable and cannot be changed from '%s' to '%s'",
+			existingSpec.GetVirtualNetwork(), newSpec.GetVirtualNetwork())
+	}
+
+	return nil
+}

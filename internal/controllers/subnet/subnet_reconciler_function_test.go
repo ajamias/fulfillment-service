@@ -1,0 +1,536 @@
+/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/
+
+package subnet
+
+import (
+	"context"
+	"errors"
+	"slices"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/fulfillment-service/internal/controllers"
+	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/fulfillment-service/internal/kubernetes/gvks"
+	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
+)
+
+var _ = Describe("buildSpec", func() {
+	It("Includes all fields when IPv4 and IPv6 are present", func() {
+		ipv4 := "10.0.1.0/24"
+		ipv6 := "2001:db8::/64"
+		vnetID := "vnet-123"
+
+		task := &task{
+			subnet: privatev1.Subnet_builder{
+				Id: "subnet-test-123",
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: vnetID,
+					Ipv4Cidr:       &ipv4,
+					Ipv6Cidr:       &ipv6,
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := task.buildSpec()
+
+		Expect(spec["virtualNetwork"]).To(Equal(vnetID))
+		Expect(spec["ipv4Cidr"]).To(Equal(ipv4))
+		Expect(spec["ipv6Cidr"]).To(Equal(ipv6))
+	})
+
+	It("Includes only IPv4 when IPv6 is not present", func() {
+		ipv4 := "192.168.1.0/24"
+		vnetID := "vnet-456"
+
+		task := &task{
+			subnet: privatev1.Subnet_builder{
+				Id: "subnet-test-456",
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: vnetID,
+					Ipv4Cidr:       &ipv4,
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := task.buildSpec()
+
+		Expect(spec["virtualNetwork"]).To(Equal(vnetID))
+		Expect(spec["ipv4Cidr"]).To(Equal(ipv4))
+		Expect(spec).ToNot(HaveKey("ipv6Cidr"))
+	})
+
+	It("Includes only IPv6 when IPv4 is not present", func() {
+		ipv6 := "fd00:1234::/64"
+		vnetID := "vnet-789"
+
+		task := &task{
+			subnet: privatev1.Subnet_builder{
+				Id: "subnet-test-789",
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: vnetID,
+					Ipv6Cidr:       &ipv6,
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := task.buildSpec()
+
+		Expect(spec["virtualNetwork"]).To(Equal(vnetID))
+		Expect(spec).ToNot(HaveKey("ipv4Cidr"))
+		Expect(spec["ipv6Cidr"]).To(Equal(ipv6))
+	})
+})
+
+// newSubnetCR creates an unstructured Subnet CR for use with the fake client.
+func newSubnetCR(id, namespace, name string, deletionTimestamp *metav1.Time) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvks.Subnet)
+	obj.SetNamespace(namespace)
+	obj.SetName(name)
+	obj.SetLabels(map[string]string{
+		labels.SubnetUuid: id,
+	})
+	if deletionTimestamp != nil {
+		obj.SetDeletionTimestamp(deletionTimestamp)
+		obj.SetFinalizers([]string{"osac.openshift.io/subnet"})
+	}
+	return obj
+}
+
+// hasFinalizer checks if the fulfillment-controller finalizer is present on the subnet.
+func hasFinalizer(subnet *privatev1.Subnet) bool {
+	return slices.Contains(subnet.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+// newTaskForDelete creates a task configured for testing delete() with hub-dependent paths.
+func newTaskForDelete(subnetID, hubID string, hubCache controllers.HubCache) *task {
+	subnet := privatev1.Subnet_builder{
+		Id: subnetID,
+		Metadata: privatev1.Metadata_builder{
+			Finalizers: []string{finalizers.Controller},
+		}.Build(),
+		Status: privatev1.SubnetStatus_builder{
+			Hub: hubID,
+		}.Build(),
+	}.Build()
+
+	f := &function{
+		logger:   logger,
+		hubCache: hubCache,
+	}
+
+	return &task{
+		r:      f,
+		subnet: subnet,
+	}
+}
+
+var _ = Describe("delete", func() {
+	const (
+		subnetID     = "subnet-delete-id"
+		hubID        = "test-hub"
+		hubNamespace = "test-ns"
+		crName       = "subnet-test"
+	)
+
+	var (
+		ctx  context.Context
+		ctrl *gomock.Controller
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ctrl = gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+	})
+
+	It("should remove finalizer when K8s object doesn't exist", func() {
+		scheme := runtime.NewScheme()
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		t := newTaskForDelete(subnetID, hubID, hubCache)
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+
+		err := t.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(hasFinalizer(t.subnet)).To(BeFalse())
+	})
+
+	It("should call hubClient.Delete when K8s object exists without DeletionTimestamp", func() {
+		cr := newSubnetCR(subnetID, hubNamespace, crName, nil)
+
+		scheme := runtime.NewScheme()
+		scheme.AddKnownTypeWithName(
+			schema.GroupVersionKind{Group: gvks.Subnet.Group, Version: gvks.Subnet.Version, Kind: gvks.Subnet.Kind + "List"},
+			&unstructured.UnstructuredList{},
+		)
+
+		deleteCalled := false
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cr).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Delete: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.DeleteOption) error {
+					deleteCalled = true
+					return nil
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		t := newTaskForDelete(subnetID, hubID, hubCache)
+
+		err := t.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(deleteCalled).To(BeTrue())
+		// Finalizer should NOT be removed — K8s object still exists
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+	})
+
+	It("should not call hubClient.Delete when K8s object has DeletionTimestamp", func() {
+		now := metav1.Now()
+		cr := newSubnetCR(subnetID, hubNamespace, crName, &now)
+
+		scheme := runtime.NewScheme()
+		scheme.AddKnownTypeWithName(
+			schema.GroupVersionKind{Group: gvks.Subnet.Group, Version: gvks.Subnet.Version, Kind: gvks.Subnet.Kind + "List"},
+			&unstructured.UnstructuredList{},
+		)
+
+		deleteCalled := false
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cr).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Delete: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.DeleteOption) error {
+					deleteCalled = true
+					return nil
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		t := newTaskForDelete(subnetID, hubID, hubCache)
+
+		err := t.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(deleteCalled).To(BeFalse())
+		// Finalizer should NOT be removed — K8s object still being deleted
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+	})
+
+	It("should propagate error when hub cache returns error", func() {
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(nil, errors.New("hub not found"))
+
+		t := newTaskForDelete(subnetID, hubID, hubCache)
+
+		err := t.delete(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("hub not found"))
+		// Finalizer should NOT be removed on error
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+	})
+
+	It("should remove finalizer when no hub is assigned", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: subnetID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Status: privatev1.SubnetStatus_builder{
+				// No hub assigned
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger: logger,
+		}
+
+		t := &task{
+			r:      f,
+			subnet: subnet,
+		}
+
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+
+		err := t.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(hasFinalizer(t.subnet)).To(BeFalse())
+	})
+})
+
+var _ = Describe("validateTenant", func() {
+	It("should succeed when exactly one tenant is assigned", func() {
+		subnet := privatev1.Subnet_builder{
+			Metadata: privatev1.Metadata_builder{
+				Tenants: []string{"tenant-1"},
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		err := t.validateTenant()
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("should fail when no tenants are assigned", func() {
+		subnet := privatev1.Subnet_builder{
+			Metadata: privatev1.Metadata_builder{
+				Tenants: []string{},
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		err := t.validateTenant()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("exactly one tenant"))
+	})
+
+	It("should fail when multiple tenants are assigned", func() {
+		subnet := privatev1.Subnet_builder{
+			Metadata: privatev1.Metadata_builder{
+				Tenants: []string{"tenant-1", "tenant-2"},
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		err := t.validateTenant()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("exactly one tenant"))
+	})
+
+	It("should fail when metadata is missing", func() {
+		subnet := privatev1.Subnet_builder{}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		err := t.validateTenant()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("exactly one tenant"))
+	})
+})
+
+var _ = Describe("setDefaults", func() {
+	It("should set PENDING state when status is unspecified", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-defaults",
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		t.setDefaults()
+
+		Expect(t.subnet.GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+	})
+
+	It("should not overwrite existing state", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-existing-state",
+			Status: privatev1.SubnetStatus_builder{
+				State: privatev1.SubnetState_SUBNET_STATE_READY,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		t.setDefaults()
+
+		Expect(t.subnet.GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+	})
+
+	It("should create status if it doesn't exist", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-no-status",
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		Expect(t.subnet.HasStatus()).To(BeFalse())
+
+		t.setDefaults()
+
+		Expect(t.subnet.HasStatus()).To(BeTrue())
+		Expect(t.subnet.GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+	})
+})
+
+var _ = Describe("addFinalizer", func() {
+	It("should add finalizer when not present", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-no-finalizer",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{},
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		added := t.addFinalizer()
+
+		Expect(added).To(BeTrue())
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+	})
+
+	It("should not add finalizer when already present", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-has-finalizer",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		added := t.addFinalizer()
+
+		Expect(added).To(BeFalse())
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+		// Should not duplicate
+		Expect(len(t.subnet.GetMetadata().GetFinalizers())).To(Equal(1))
+	})
+
+	It("should create metadata if it doesn't exist", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-no-metadata",
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		Expect(t.subnet.HasMetadata()).To(BeFalse())
+
+		added := t.addFinalizer()
+
+		Expect(added).To(BeTrue())
+		Expect(t.subnet.HasMetadata()).To(BeTrue())
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+	})
+})
+
+var _ = Describe("removeFinalizer", func() {
+	It("should remove finalizer when present", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-has-finalizer",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller, "other-finalizer"},
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		Expect(hasFinalizer(t.subnet)).To(BeTrue())
+
+		t.removeFinalizer()
+
+		Expect(hasFinalizer(t.subnet)).To(BeFalse())
+		// Other finalizers should remain
+		Expect(t.subnet.GetMetadata().GetFinalizers()).To(ContainElement("other-finalizer"))
+	})
+
+	It("should do nothing when finalizer not present", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-no-finalizer",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{"other-finalizer"},
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		Expect(hasFinalizer(t.subnet)).To(BeFalse())
+
+		t.removeFinalizer()
+
+		Expect(hasFinalizer(t.subnet)).To(BeFalse())
+		Expect(t.subnet.GetMetadata().GetFinalizers()).To(ContainElement("other-finalizer"))
+	})
+
+	It("should do nothing when metadata doesn't exist", func() {
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-no-metadata",
+		}.Build()
+
+		t := &task{
+			subnet: subnet,
+		}
+
+		// Should not panic
+		t.removeFinalizer()
+
+		Expect(t.subnet.HasMetadata()).To(BeFalse())
+	})
+})

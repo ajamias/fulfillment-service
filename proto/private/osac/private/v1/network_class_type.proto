@@ -94,6 +94,10 @@ message NetworkClassStatus {
   // Human-readable message providing additional details about the current state. For example, if the state is
   // FAILED, this message might explain what went wrong.
   optional string message = 2;
+
+  // Identifier of the hub that was selected for this network class.
+  // This is system-managed and used by the controller to track which hub cluster manages this class's resources.
+  string hub = 3;
 }
 
 // Lifecycle states for NetworkClass resources.

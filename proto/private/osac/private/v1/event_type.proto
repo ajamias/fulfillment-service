@@ -23,6 +23,9 @@ import "osac/private/v1/host_class_type.proto";
 import "osac/private/v1/host_pool_type.proto";
 import "osac/private/v1/host_type.proto";
 import "osac/private/v1/hub_type.proto";
+import "osac/private/v1/network_class_type.proto";
+import "osac/private/v1/subnet_type.proto";
+import "osac/private/v1/virtual_network_type.proto";
 
 // Represents events delivered by the server.
 message Event {
@@ -42,6 +45,9 @@ message Event {
     ComputeInstance compute_instance = 8;
     Host host = 9;
     HostPool host_pool = 10;
+    NetworkClass network_class = 11;
+    Subnet subnet = 12;
+    VirtualNetwork virtual_network = 13;
   }
 }
 

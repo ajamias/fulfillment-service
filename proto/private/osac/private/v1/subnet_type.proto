@@ -119,6 +119,12 @@ message SubnetStatus {
   //
   // For READY state, this is typically empty or contains confirmation like "Subnet ready for compute instances".
   optional string message = 2;
+
+  // Identifier of the hub that was selected for this subnet.
+  //
+  // The fulfillment-service controller randomly selects a hub from available hubs and stores the hub ID here.
+  // This tracks which hub cluster the Subnet CR is deployed to for reconciliation and cleanup.
+  string hub = 3;
 }
 
 // Lifecycle states for Subnet resources.

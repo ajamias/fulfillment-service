@@ -60,6 +60,30 @@ var Secret = schema.GroupVersionKind{
 	Kind:    "Secret",
 }
 
+var Subnet = schema.GroupVersionKind{
+	Group:   "osac.openshift.io",
+	Version: "v1alpha1",
+	Kind:    "Subnet",
+}
+
+var SubnetList = listGVK(Subnet)
+
+var VirtualNetwork = schema.GroupVersionKind{
+	Group:   "osac.openshift.io",
+	Version: "v1alpha1",
+	Kind:    "VirtualNetwork",
+}
+
+var VirtualNetworkList = listGVK(VirtualNetwork)
+
+var NetworkClass = schema.GroupVersionKind{
+	Group:   "osac.openshift.io",
+	Version: "v1alpha1",
+	Kind:    "NetworkClass",
+}
+
+var NetworkClassList = listGVK(NetworkClass)
+
 func listGVK(gvk schema.GroupVersionKind) schema.GroupVersionKind {
 	gvk.Kind = gvk.Kind + "List"
 	return gvk

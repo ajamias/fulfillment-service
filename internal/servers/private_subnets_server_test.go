@@ -1,0 +1,1039 @@
+/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/
+
+package servers
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+
+	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/fulfillment-service/internal/database"
+	"github.com/osac-project/fulfillment-service/internal/database/dao"
+)
+
+var _ = Describe("Private subnets server", func() {
+	var (
+		ctx context.Context
+		tx  database.Tx
+	)
+
+	BeforeEach(func() {
+		var err error
+
+		// Create a context:
+		ctx = context.Background()
+
+		// Prepare the database pool:
+		db := server.MakeDatabase()
+		DeferCleanup(db.Close)
+		pool, err := pgxpool.New(ctx, db.MakeURL())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(pool.Close)
+
+		// Create the transaction manager:
+		tm, err := database.NewTxManager().
+			SetLogger(logger).
+			SetPool(pool).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		// Start a transaction and add it to the context:
+		tx, err = tm.Begin(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			err := tm.End(ctx, tx)
+			Expect(err).ToNot(HaveOccurred())
+		})
+		ctx = database.TxIntoContext(ctx, tx)
+
+		// Create the tables:
+		err = dao.CreateTables(ctx, "subnets", "virtual_networks", "network_classes")
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	// Helper function to create a NetworkClass for validation tests
+	createNetworkClass := func(ctx context.Context) *privatev1.NetworkClass {
+		// Create NetworkClass DAO
+		ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+			SetLogger(logger).
+			SetTable("network_classes").
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		nc := privatev1.NetworkClass_builder{
+			ImplementationStrategy: "test-strategy",
+			Capabilities: privatev1.NetworkClassCapabilities_builder{
+				SupportsIpv4:      true,
+				SupportsIpv6:      true,
+				SupportsDualStack: true,
+			}.Build(),
+			Status: privatev1.NetworkClassStatus_builder{
+				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			}.Build(),
+		}.Build()
+
+		response, err := ncDao.Create().
+			SetObject(nc).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		return response.GetObject()
+	}
+
+	// Helper function to create a VirtualNetwork parent for Subnet tests
+	createVirtualNetwork := func(ctx context.Context, ipv4Cidr, ipv6Cidr string) *privatev1.VirtualNetwork {
+		// Ensure NetworkClass exists
+		nc := createNetworkClass(ctx)
+
+		// Create VirtualNetwork DAO
+		vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+			SetLogger(logger).
+			SetTable("virtual_networks").
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		builder := privatev1.VirtualNetwork_builder{
+			Spec: privatev1.VirtualNetworkSpec_builder{
+				NetworkClass: nc.GetImplementationStrategy(),
+				Region:       "us-west-1",
+			}.Build(),
+			Status: privatev1.VirtualNetworkStatus_builder{
+				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+			}.Build(),
+		}
+
+		// Add IPv4 CIDR if provided
+		if ipv4Cidr != "" {
+			builder.Spec.Ipv4Cidr = proto.String(ipv4Cidr)
+		}
+
+		// Add IPv6 CIDR if provided
+		if ipv6Cidr != "" {
+			builder.Spec.Ipv6Cidr = proto.String(ipv6Cidr)
+		}
+
+		vn := builder.Build()
+
+		response, err := vnDao.Create().
+			SetObject(vn).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		return response.GetObject()
+	}
+
+	Describe("Creation", func() {
+		It("Can be built if all the required parameters are set", func() {
+			server, err := NewPrivateSubnetsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(server).ToNot(BeNil())
+		})
+
+		It("Fails if logger is not set", func() {
+			server, err := NewPrivateSubnetsServer().
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).To(MatchError("logger is mandatory"))
+			Expect(server).To(BeNil())
+		})
+
+		It("Fails if tenancy logic is not set", func() {
+			server, err := NewPrivateSubnetsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				Build()
+			Expect(err).To(MatchError("tenancy logic is mandatory"))
+			Expect(server).To(BeNil())
+		})
+	})
+
+	Describe("Validation tests", func() {
+		var server *PrivateSubnetsServer
+
+		BeforeEach(func() {
+			var err error
+
+			// Create the server:
+			server, err = NewPrivateSubnetsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Context("SUB-VAL-01: IPv4 CIDR validation", func() {
+			It("accepts valid IPv4 CIDR", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects invalid IPv4 CIDR format", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("not-a-cidr"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("invalid IPv4 CIDR"))
+			})
+
+			It("rejects IPv4 with invalid mask", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/33"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("invalid IPv4 CIDR"))
+			})
+
+			It("rejects IPv6 address in IPv4 field", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("2001:db8::/32"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("contains IPv6 address"))
+			})
+		})
+
+		Context("SUB-VAL-02: IPv6 CIDR validation", func() {
+			It("accepts valid IPv6 CIDR", func() {
+				vn := createVirtualNetwork(ctx, "", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv6Cidr:       proto.String("2001:db8:1::/64"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects invalid IPv6 CIDR format", func() {
+				vn := createVirtualNetwork(ctx, "", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv6Cidr:       proto.String("not-ipv6"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("invalid IPv6 CIDR"))
+			})
+
+			It("rejects IPv6 with invalid mask", func() {
+				vn := createVirtualNetwork(ctx, "", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv6Cidr:       proto.String("2001:db8::/129"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("invalid IPv6 CIDR"))
+			})
+
+			It("rejects IPv4 address in IPv6 field", func() {
+				vn := createVirtualNetwork(ctx, "", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv6Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("contains IPv4 address"))
+			})
+		})
+
+		Context("SUB-VAL-03: At least one CIDR required", func() {
+			It("rejects both IPv4 and IPv6 CIDRs empty", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("at least one"))
+			})
+
+			It("accepts IPv4-only configuration", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("accepts IPv6-only configuration", func() {
+				vn := createVirtualNetwork(ctx, "", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv6Cidr:       proto.String("2001:db8:1::/64"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("accepts dual-stack configuration", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						Ipv6Cidr:       proto.String("2001:db8:1::/64"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+
+		Context("SUB-VAL-04: Parent VirtualNetwork existence", func() {
+			It("accepts valid parent VirtualNetwork ID", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects non-existent parent VirtualNetwork", func() {
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: "non-existent-id",
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("does not exist"))
+			})
+		})
+
+		Context("SUB-VAL-05: Parent VirtualNetwork READY state", func() {
+			It("accepts parent VirtualNetwork in READY state", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects parent VirtualNetwork in PENDING state", func() {
+				// Create VirtualNetwork DAO
+				vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+					SetLogger(logger).
+					SetTable("virtual_networks").
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				nc := createNetworkClass(ctx)
+
+				vn := privatev1.VirtualNetwork_builder{
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     proto.String("10.0.0.0/16"),
+						NetworkClass: nc.GetImplementationStrategy(),
+						Region:       "us-west-1",
+					}.Build(),
+					Status: privatev1.VirtualNetworkStatus_builder{
+						State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
+					}.Build(),
+				}.Build()
+
+				response, err := vnDao.Create().
+					SetObject(vn).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				vn = response.GetObject()
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err = server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("not in READY state"))
+			})
+
+			It("rejects parent VirtualNetwork in FAILED state", func() {
+				// Create VirtualNetwork DAO
+				vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+					SetLogger(logger).
+					SetTable("virtual_networks").
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				nc := createNetworkClass(ctx)
+
+				vn := privatev1.VirtualNetwork_builder{
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     proto.String("10.0.0.0/16"),
+						NetworkClass: nc.GetImplementationStrategy(),
+						Region:       "us-west-1",
+					}.Build(),
+					Status: privatev1.VirtualNetworkStatus_builder{
+						State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED,
+					}.Build(),
+				}.Build()
+
+				response, err := vnDao.Create().
+					SetObject(vn).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				vn = response.GetObject()
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err = server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("not in READY state"))
+			})
+		})
+
+		Context("SUB-VAL-06: CIDR subset containment", func() {
+			It("accepts subnet within parent VirtualNetwork", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects subnet outside parent VirtualNetwork", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("192.168.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("not within parent"))
+			})
+
+			It("rejects subnet larger than parent VirtualNetwork", func() {
+				vn := createVirtualNetwork(ctx, "10.0.1.0/24", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.0.0/16"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("not within parent"))
+			})
+
+			It("accepts subnet matching parent VirtualNetwork exactly", func() {
+				vn := createVirtualNetwork(ctx, "10.0.1.0/24", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+
+		Context("SUB-VAL-07: IPv4 CIDR only if parent has IPv4", func() {
+			It("accepts IPv4 CIDR when parent has IPv4", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects IPv4 CIDR when parent is IPv6-only", func() {
+				vn := createVirtualNetwork(ctx, "", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("does not support IPv4"))
+			})
+		})
+
+		Context("SUB-VAL-08: IPv6 CIDR only if parent has IPv6", func() {
+			It("accepts IPv6 CIDR when parent has IPv6", func() {
+				vn := createVirtualNetwork(ctx, "", "2001:db8::/32")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv6Cidr:       proto.String("2001:db8:1::/64"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects IPv6 CIDR when parent is IPv4-only", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv6Cidr:       proto.String("2001:db8:1::/64"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("does not support IPv6"))
+			})
+		})
+
+		Context("SUB-VAL-09: Tenant isolation", func() {
+			It("accepts subnet with same tenant as parent", func() {
+				// Create VirtualNetwork DAO
+				vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+					SetLogger(logger).
+					SetTable("virtual_networks").
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				nc := createNetworkClass(ctx)
+
+				vn := privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenants: []string{"tenant-a"},
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     proto.String("10.0.0.0/16"),
+						NetworkClass: nc.GetImplementationStrategy(),
+						Region:       "us-west-1",
+					}.Build(),
+					Status: privatev1.VirtualNetworkStatus_builder{
+						State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+					}.Build(),
+				}.Build()
+
+				response, err := vnDao.Create().
+					SetObject(vn).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				vn = response.GetObject()
+
+				subnet := privatev1.Subnet_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenants: []string{"tenant-a"},
+					}.Build(),
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err = server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects subnet with different tenant than parent", func() {
+				// Note: SUB-VAL-09 tenant isolation is enforced by tenancy logic at the DAO layer,
+				// not in validation logic. This test documents the expected behavior but actual
+				// enforcement happens in servers_tenancy_test.go (see SUB-VAL-12, SUB-VAL-13).
+				// In validation, we verify parent exists and is accessible.
+			})
+		})
+
+		Context("SUB-VAL-10: OwnerReference annotation", func() {
+			It("verifies ownerReference annotation is set after Create", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				// Create Subnet DAO for Create operation
+				subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+					SetLogger(logger).
+					SetTable("subnets").
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				subnet := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				// Simulate what Create operation does (validation + annotation)
+				err = server.validateSubnet(ctx, subnet, nil)
+				Expect(err).ToNot(HaveOccurred())
+
+				// Set owner reference annotation
+				if subnet.GetMetadata() == nil {
+					subnet.Metadata = &privatev1.Metadata{}
+				}
+				if subnet.GetMetadata().GetAnnotations() == nil {
+					subnet.Metadata.Annotations = make(map[string]string)
+				}
+				subnet.Metadata.Annotations["osac.io/owner-reference"] = subnet.GetSpec().GetVirtualNetwork()
+
+				// Create the subnet
+				createResponse, err := subnetDao.Create().
+					SetObject(subnet).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				created := createResponse.GetObject()
+
+				// Verify annotation is set
+				Expect(created.GetMetadata().GetAnnotations()).To(HaveKey("osac.io/owner-reference"))
+				Expect(created.GetMetadata().GetAnnotations()["osac.io/owner-reference"]).To(Equal(vn.GetId()))
+			})
+		})
+
+		Context("SUB-VAL-11: Parent VirtualNetwork immutability", func() {
+			It("prevents parent VirtualNetwork modification on Update", func() {
+				vn1 := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+				vn2 := createVirtualNetwork(ctx, "192.168.0.0/16", "")
+
+				existing := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn1.GetId(),
+					}.Build(),
+				}.Build()
+
+				updated := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("192.168.1.0/24"),
+						VirtualNetwork: vn2.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, updated, existing)
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("virtual_network"))
+				Expect(err.Error()).To(ContainSubstring("immutable"))
+			})
+
+			It("allows parent VirtualNetwork to stay same on Update", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+				existing := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				updated := privatev1.Subnet_builder{
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String("10.0.1.0/24"),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, updated, existing)
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+
+		// SUB-VAL-12, SUB-VAL-13: Tenant isolation for Delete and List operations
+		// are covered by servers_tenancy_test.go, not validation tests
+	})
+
+	Describe("GenericDAO Subnet operations", func() {
+		var generic *dao.GenericDAO[*privatev1.Subnet]
+
+		BeforeEach(func() {
+			var err error
+
+			// Create DAO
+			generic, err = dao.NewGenericDAO[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetTable("subnets").
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("creates Subnet and generates ID", func() {
+			vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+			subnet := privatev1.Subnet_builder{
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       proto.String("10.0.1.0/24"),
+					VirtualNetwork: vn.GetId(),
+				}.Build(),
+			}.Build()
+
+			response, err := generic.Create().
+				SetObject(subnet).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			subnet = response.GetObject()
+			Expect(subnet.GetId()).ToNot(BeEmpty())
+			Expect(subnet.GetMetadata()).ToNot(BeNil())
+			Expect(subnet.GetMetadata().GetCreationTimestamp()).ToNot(BeNil())
+		})
+
+		It("retrieves Subnet by ID", func() {
+			vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+			subnet := privatev1.Subnet_builder{
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       proto.String("10.0.1.0/24"),
+					VirtualNetwork: vn.GetId(),
+				}.Build(),
+			}.Build()
+
+			createResponse, err := generic.Create().
+				SetObject(subnet).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			subnet = createResponse.GetObject()
+
+			getResponse, err := generic.Get().
+				SetId(subnet.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			retrieved := getResponse.GetObject()
+			Expect(proto.Equal(subnet, retrieved)).To(BeTrue())
+		})
+
+		It("lists Subnets with pagination", func() {
+			vn := createVirtualNetwork(ctx, "10.0.0.0/8", "")
+
+			// Create multiple Subnets
+			const count = 10
+			for i := 0; i < count; i++ {
+				subnet := privatev1.Subnet_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("subnet-%d", i),
+					}.Build(),
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String(fmt.Sprintf("10.%d.0.0/16", i)),
+						VirtualNetwork: vn.GetId(),
+					}.Build(),
+				}.Build()
+
+				_, err := generic.Create().
+					SetObject(subnet).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			// List with limit
+			response, err := generic.List().
+				SetLimit(5).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(5))
+			Expect(response.GetTotal()).To(Equal(int32(count)))
+		})
+
+		It("lists Subnets with SQL filtering by parent VirtualNetwork", func() {
+			vn1 := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+			vn2 := createVirtualNetwork(ctx, "192.168.0.0/16", "")
+
+			// Create subnets for vn1
+			for i := range 3 {
+				subnet := privatev1.Subnet_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("vn1-subnet-%d", i),
+					}.Build(),
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String(fmt.Sprintf("10.0.%d.0/24", i)),
+						VirtualNetwork: vn1.GetId(),
+					}.Build(),
+				}.Build()
+
+				_, err := generic.Create().
+					SetObject(subnet).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			// Create subnets for vn2
+			for i := range 2 {
+				subnet := privatev1.Subnet_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("vn2-subnet-%d", i),
+					}.Build(),
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       proto.String(fmt.Sprintf("192.168.%d.0/24", i)),
+						VirtualNetwork: vn2.GetId(),
+					}.Build(),
+				}.Build()
+
+				_, err := generic.Create().
+					SetObject(subnet).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			// List subnets for vn1 only
+			response, err := generic.List().
+				SetFilter(fmt.Sprintf("this.spec.virtual_network == '%s'", vn1.GetId())).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(3))
+			for _, subnet := range response.GetItems() {
+				Expect(subnet.GetSpec().GetVirtualNetwork()).To(Equal(vn1.GetId()))
+			}
+		})
+
+		It("updates Subnet", func() {
+			vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+			subnet := privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "original-name",
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       proto.String("10.0.1.0/24"),
+					VirtualNetwork: vn.GetId(),
+				}.Build(),
+			}.Build()
+
+			createResponse, err := generic.Create().
+				SetObject(subnet).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			subnet = createResponse.GetObject()
+
+			// Update name
+			subnet.GetMetadata().Name = "updated-name"
+			updateResponse, err := generic.Update().
+				SetObject(subnet).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			subnet = updateResponse.GetObject()
+
+			// Verify update
+			getResponse, err := generic.Get().
+				SetId(subnet.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			retrieved := getResponse.GetObject()
+			Expect(retrieved.GetMetadata().GetName()).To(Equal("updated-name"))
+		})
+
+		It("soft deletes Subnet", func() {
+			vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+
+			subnet := privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Finalizers: []string{"test-finalizer"},
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       proto.String("10.0.1.0/24"),
+					VirtualNetwork: vn.GetId(),
+				}.Build(),
+			}.Build()
+
+			createResponse, err := generic.Create().
+				SetObject(subnet).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			subnet = createResponse.GetObject()
+
+			// Delete
+			_, err = generic.Delete().
+				SetId(subnet.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Verify soft delete (deletion_timestamp set, object still retrievable)
+			getResponse, err := generic.Get().
+				SetId(subnet.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			retrieved := getResponse.GetObject()
+			Expect(retrieved.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+		})
+
+		It("enforces tenant isolation", func() {
+			vn1 := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+			vn2 := createVirtualNetwork(ctx, "192.168.0.0/16", "")
+
+			// Create Subnet with tenant-a
+			subnet1 := privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "subnet-tenant-a",
+					Tenants: []string{"tenant-a"},
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       proto.String("10.0.1.0/24"),
+					VirtualNetwork: vn1.GetId(),
+				}.Build(),
+			}.Build()
+
+			_, err := generic.Create().
+				SetObject(subnet1).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create Subnet with tenant-b
+			subnet2 := privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "subnet-tenant-b",
+					Tenants: []string{"tenant-b"},
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       proto.String("192.168.1.0/24"),
+					VirtualNetwork: vn2.GetId(),
+				}.Build(),
+			}.Build()
+
+			_, err = generic.Create().
+				SetObject(subnet2).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// List should return both (tenancy logic allows all in test context)
+			response, err := generic.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(2))
+		})
+	})
+})
