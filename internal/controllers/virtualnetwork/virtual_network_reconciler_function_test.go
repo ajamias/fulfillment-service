@@ -41,16 +41,18 @@ var _ = Describe("buildSpec", func() {
 		ipv4 := "10.0.0.0/16"
 		ipv6 := "2001:db8::/48"
 		region := "us-east-1"
-		networkClass := "udn-net"
+		networkClass := "cudn-net"
+		implementationStrategy := "cudn"
 
 		task := &task{
 			virtualNetwork: privatev1.VirtualNetwork_builder{
 				Id: "vnet-test-123",
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					Region:       region,
-					NetworkClass: networkClass,
-					Ipv4Cidr:     &ipv4,
-					Ipv6Cidr:     &ipv6,
+					Region:                 region,
+					NetworkClass:           networkClass,
+					ImplementationStrategy: implementationStrategy,
+					Ipv4Cidr:               &ipv4,
+					Ipv6Cidr:               &ipv6,
 					Capabilities: privatev1.VirtualNetworkCapabilities_builder{
 						EnableIpv4:      true,
 						EnableIpv6:      true,
@@ -63,26 +65,29 @@ var _ = Describe("buildSpec", func() {
 		spec := task.buildSpec()
 
 		Expect(spec["region"]).To(Equal(region))
-		Expect(spec["network_class"]).To(Equal(networkClass))
-		Expect(spec["ipv4_cidr"]).To(Equal(ipv4))
-		Expect(spec["ipv6_cidr"]).To(Equal(ipv6))
-		Expect(spec["capabilities"]).To(HaveKeyWithValue("enable_ipv4", true))
-		Expect(spec["capabilities"]).To(HaveKeyWithValue("enable_ipv6", true))
-		Expect(spec["capabilities"]).To(HaveKeyWithValue("enable_dual_stack", true))
+		Expect(spec["networkClass"]).To(Equal(networkClass))
+		Expect(spec["implementationStrategy"]).To(Equal(implementationStrategy))
+		Expect(spec["ipv4Cidr"]).To(Equal(ipv4))
+		Expect(spec["ipv6Cidr"]).To(Equal(ipv6))
+		Expect(spec["capabilities"]).To(HaveKeyWithValue("enableIpv4", true))
+		Expect(spec["capabilities"]).To(HaveKeyWithValue("enableIpv6", true))
+		Expect(spec["capabilities"]).To(HaveKeyWithValue("enableDualStack", true))
 	})
 
 	It("Includes only IPv4 when IPv6 is not present", func() {
 		ipv4 := "192.168.0.0/16"
 		region := "eu-west-1"
 		networkClass := "phys-net"
+		implementationStrategy := "physnet"
 
 		task := &task{
 			virtualNetwork: privatev1.VirtualNetwork_builder{
 				Id: "vnet-test-456",
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					Region:       region,
-					NetworkClass: networkClass,
-					Ipv4Cidr:     &ipv4,
+					Region:                 region,
+					NetworkClass:           networkClass,
+					ImplementationStrategy: implementationStrategy,
+					Ipv4Cidr:               &ipv4,
 					Capabilities: privatev1.VirtualNetworkCapabilities_builder{
 						EnableIpv4: true,
 					}.Build(),
@@ -93,24 +98,27 @@ var _ = Describe("buildSpec", func() {
 		spec := task.buildSpec()
 
 		Expect(spec["region"]).To(Equal(region))
-		Expect(spec["network_class"]).To(Equal(networkClass))
-		Expect(spec["ipv4_cidr"]).To(Equal(ipv4))
-		Expect(spec).ToNot(HaveKey("ipv6_cidr"))
-		Expect(spec["capabilities"]).To(HaveKeyWithValue("enable_ipv4", true))
+		Expect(spec["networkClass"]).To(Equal(networkClass))
+		Expect(spec["implementationStrategy"]).To(Equal(implementationStrategy))
+		Expect(spec["ipv4Cidr"]).To(Equal(ipv4))
+		Expect(spec).ToNot(HaveKey("ipv6Cidr"))
+		Expect(spec["capabilities"]).To(HaveKeyWithValue("enableIpv4", true))
 	})
 
 	It("Includes only IPv6 when IPv4 is not present", func() {
 		ipv6 := "fd00:1234::/32"
 		region := "ap-south-1"
 		networkClass := "ovn-kubernetes"
+		implementationStrategy := "ovn"
 
 		task := &task{
 			virtualNetwork: privatev1.VirtualNetwork_builder{
 				Id: "vnet-test-789",
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					Region:       region,
-					NetworkClass: networkClass,
-					Ipv6Cidr:     &ipv6,
+					Region:                 region,
+					NetworkClass:           networkClass,
+					ImplementationStrategy: implementationStrategy,
+					Ipv6Cidr:               &ipv6,
 					Capabilities: privatev1.VirtualNetworkCapabilities_builder{
 						EnableIpv6: true,
 					}.Build(),
@@ -121,24 +129,27 @@ var _ = Describe("buildSpec", func() {
 		spec := task.buildSpec()
 
 		Expect(spec["region"]).To(Equal(region))
-		Expect(spec["network_class"]).To(Equal(networkClass))
-		Expect(spec).ToNot(HaveKey("ipv4_cidr"))
-		Expect(spec["ipv6_cidr"]).To(Equal(ipv6))
-		Expect(spec["capabilities"]).To(HaveKeyWithValue("enable_ipv6", true))
+		Expect(spec["networkClass"]).To(Equal(networkClass))
+		Expect(spec["implementationStrategy"]).To(Equal(implementationStrategy))
+		Expect(spec).ToNot(HaveKey("ipv4Cidr"))
+		Expect(spec["ipv6Cidr"]).To(Equal(ipv6))
+		Expect(spec["capabilities"]).To(HaveKeyWithValue("enableIpv6", true))
 	})
 
 	It("Handles missing capabilities field", func() {
 		ipv4 := "172.16.0.0/12"
 		region := "us-west-2"
-		networkClass := "udn-net"
+		networkClass := "cudn-net"
+		implementationStrategy := "cudn"
 
 		task := &task{
 			virtualNetwork: privatev1.VirtualNetwork_builder{
 				Id: "vnet-test-no-caps",
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					Region:       region,
-					NetworkClass: networkClass,
-					Ipv4Cidr:     &ipv4,
+					Region:                 region,
+					NetworkClass:           networkClass,
+					ImplementationStrategy: implementationStrategy,
+					Ipv4Cidr:               &ipv4,
 				}.Build(),
 			}.Build(),
 		}
@@ -146,8 +157,9 @@ var _ = Describe("buildSpec", func() {
 		spec := task.buildSpec()
 
 		Expect(spec["region"]).To(Equal(region))
-		Expect(spec["network_class"]).To(Equal(networkClass))
-		Expect(spec["ipv4_cidr"]).To(Equal(ipv4))
+		Expect(spec["networkClass"]).To(Equal(networkClass))
+		Expect(spec["implementationStrategy"]).To(Equal(implementationStrategy))
+		Expect(spec["ipv4Cidr"]).To(Equal(ipv4))
 		Expect(spec).ToNot(HaveKey("capabilities"))
 	})
 })

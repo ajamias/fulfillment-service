@@ -157,7 +157,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
@@ -169,7 +169,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("invalid IPv4 CIDR"))
 			})
@@ -182,7 +182,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("invalid IPv4 CIDR"))
 			})
@@ -195,7 +195,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("contains IPv6 address"))
 			})
@@ -213,7 +213,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
@@ -225,7 +225,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("invalid IPv6 CIDR"))
 			})
@@ -238,7 +238,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("invalid IPv6 CIDR"))
 			})
@@ -251,7 +251,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("contains IPv4 address"))
 			})
@@ -265,7 +265,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("at least one"))
 			})
@@ -281,7 +281,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
@@ -296,7 +296,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
@@ -312,7 +312,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 		})
@@ -329,7 +329,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
@@ -342,7 +342,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("does not exist"))
 			})
@@ -355,7 +355,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("network_class"))
 				Expect(err.Error()).To(ContainSubstring("required"))
@@ -374,7 +374,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
@@ -389,7 +389,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
@@ -408,7 +408,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
@@ -432,7 +432,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
@@ -473,7 +473,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err = server.validateVirtualNetwork(ctx, vn, nil)
+				_, err = server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("does not support IPv4"))
 			})
@@ -487,7 +487,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("region"))
 				Expect(err.Error()).To(ContainSubstring("required"))
@@ -504,7 +504,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, vn, nil)
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 		})
@@ -527,7 +527,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, updated, existing)
+				_, err := server.validateVirtualNetwork(ctx, updated, existing)
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
@@ -555,7 +555,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, updated, existing)
+				_, err := server.validateVirtualNetwork(ctx, updated, existing)
 				Expect(err).ToNot(HaveOccurred())
 			})
 		})
@@ -578,7 +578,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, updated, existing)
+				_, err := server.validateVirtualNetwork(ctx, updated, existing)
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
@@ -606,7 +606,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 
-				err := server.validateVirtualNetwork(ctx, updated, existing)
+				_, err := server.validateVirtualNetwork(ctx, updated, existing)
 				Expect(err).ToNot(HaveOccurred())
 			})
 		})
