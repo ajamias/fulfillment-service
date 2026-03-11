@@ -104,6 +104,20 @@ message VirtualNetworkSpec {
   // These capabilities must be compatible with the selected NetworkClass.capabilities. The system will validate
   // that the NetworkClass supports the requested addressing mode before creating the network.
   VirtualNetworkCapabilities capabilities = 5;
+
+  // Implementation strategy for provisioning this network.
+  //
+  // This determines the underlying network backend and Ansible role to use (e.g., "cudn" uses cudn_virtual_network
+  // role). The value is derived from the NetworkClass at creation time and stored here for direct access by
+  // controllers and provisioning systems.
+  //
+  // This field is set by the system based on the selected network_class and is immutable after creation.
+  //
+  // Example: "cudn", "physnet", "ovn"
+  string implementation_strategy = 6 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
 }
 
 // Describes the IP addressing capabilities requested for a VirtualNetwork.

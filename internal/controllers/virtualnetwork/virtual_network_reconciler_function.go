@@ -386,27 +386,28 @@ func (t *task) removeFinalizer() {
 // virtual network from the database.
 func (t *task) buildSpec() map[string]any {
 	spec := map[string]any{
-		"region":        t.virtualNetwork.GetSpec().GetRegion(),
-		"network_class": t.virtualNetwork.GetSpec().GetNetworkClass(),
+		"region":                 t.virtualNetwork.GetSpec().GetRegion(),
+		"networkClass":           t.virtualNetwork.GetSpec().GetNetworkClass(),
+		"implementationStrategy": t.virtualNetwork.GetSpec().GetImplementationStrategy(),
 	}
 
 	// Add IPv4 CIDR if present:
 	if t.virtualNetwork.GetSpec().HasIpv4Cidr() {
-		spec["ipv4_cidr"] = t.virtualNetwork.GetSpec().GetIpv4Cidr()
+		spec["ipv4Cidr"] = t.virtualNetwork.GetSpec().GetIpv4Cidr()
 	}
 
 	// Add IPv6 CIDR if present:
 	if t.virtualNetwork.GetSpec().HasIpv6Cidr() {
-		spec["ipv6_cidr"] = t.virtualNetwork.GetSpec().GetIpv6Cidr()
+		spec["ipv6Cidr"] = t.virtualNetwork.GetSpec().GetIpv6Cidr()
 	}
 
 	// Add capabilities if present:
 	if t.virtualNetwork.GetSpec().HasCapabilities() {
 		caps := t.virtualNetwork.GetSpec().GetCapabilities()
 		spec["capabilities"] = map[string]any{
-			"enable_ipv4":       caps.GetEnableIpv4(),
-			"enable_ipv6":       caps.GetEnableIpv6(),
-			"enable_dual_stack": caps.GetEnableDualStack(),
+			"enableIpv4":      caps.GetEnableIpv4(),
+			"enableIpv6":      caps.GetEnableIpv6(),
+			"enableDualStack": caps.GetEnableDualStack(),
 		}
 	}
 

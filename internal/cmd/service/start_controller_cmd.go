@@ -41,7 +41,6 @@ import (
 	"github.com/osac-project/fulfillment-service/internal/controllers/computeinstance"
 	"github.com/osac-project/fulfillment-service/internal/controllers/host"
 	"github.com/osac-project/fulfillment-service/internal/controllers/hostpool"
-	"github.com/osac-project/fulfillment-service/internal/controllers/networkclass"
 	"github.com/osac-project/fulfillment-service/internal/controllers/subnet"
 	"github.com/osac-project/fulfillment-service/internal/controllers/virtualnetwork"
 	internalhealth "github.com/osac-project/fulfillment-service/internal/health"
@@ -438,43 +437,6 @@ func (r *startControllerRunner) run(cmd *cobra.Command, argv []string) error {
 			r.logger.InfoContext(
 				ctx,
 				"Virtual network reconciler failed",
-				slog.Any("error", err),
-			)
-		}
-	}()
-
-	// Create the network class reconciler:
-	r.logger.InfoContext(ctx, "Creating network class reconciler")
-	networkClassReconcilerFunction, err := networkclass.NewFunction().
-		SetLogger(r.logger).
-		SetConnection(r.client).
-		SetHubCache(hubCache).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create network class reconciler function: %w", err)
-	}
-	networkClassReconciler, err := controllers.NewReconciler[*privatev1.NetworkClass]().
-		SetLogger(r.logger).
-		SetName("network_class").
-		SetClient(r.client).
-		SetFunction(networkClassReconcilerFunction).
-		SetEventFilter("has(event.network_class) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
-		SetHealthReporter(healthAggregator).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create network class reconciler: %w", err)
-	}
-
-	// Start the network class reconciler:
-	r.logger.InfoContext(ctx, "Starting network class reconciler")
-	go func() {
-		err := networkClassReconciler.Start(ctx)
-		if err == nil || errors.Is(err, context.Canceled) {
-			r.logger.InfoContext(ctx, "Network class reconciler finished")
-		} else {
-			r.logger.InfoContext(
-				ctx,
-				"Network class reconciler failed",
 				slog.Any("error", err),
 			)
 		}

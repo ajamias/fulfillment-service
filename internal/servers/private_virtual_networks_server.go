@@ -129,9 +129,15 @@ func (s *PrivateVirtualNetworksServer) Get(ctx context.Context,
 func (s *PrivateVirtualNetworksServer) Create(ctx context.Context,
 	request *privatev1.VirtualNetworksCreateRequest) (response *privatev1.VirtualNetworksCreateResponse, err error) {
 	// Validate before creating:
-	err = s.validateVirtualNetwork(ctx, request.GetObject(), nil)
+	implementationStrategy, err := s.validateVirtualNetwork(ctx, request.GetObject(), nil)
 	if err != nil {
 		return
+	}
+
+	// Set the implementation_strategy from the NetworkClass
+	// This is a system-managed field derived from the selected network_class
+	if request.GetObject().GetSpec() != nil && implementationStrategy != "" {
+		request.GetObject().GetSpec().SetImplementationStrategy(implementationStrategy)
 	}
 
 	err = s.generic.Create(ctx, request, &response)
@@ -158,9 +164,14 @@ func (s *PrivateVirtualNetworksServer) Update(ctx context.Context,
 	existingVN := getResponse.GetObject()
 
 	// Validate with existing object context:
-	err = s.validateVirtualNetwork(ctx, request.GetObject(), existingVN)
+	_, err = s.validateVirtualNetwork(ctx, request.GetObject(), existingVN)
 	if err != nil {
 		return
+	}
+
+	// Preserve implementation_strategy from existing object (it's immutable)
+	if request.GetObject().GetSpec() != nil && existingVN.GetSpec() != nil {
+		request.GetObject().GetSpec().SetImplementationStrategy(existingVN.GetSpec().GetImplementationStrategy())
 	}
 
 	err = s.generic.Update(ctx, request, &response)
@@ -180,57 +191,63 @@ func (s *PrivateVirtualNetworksServer) Signal(ctx context.Context,
 }
 
 // validateVirtualNetwork validates the VirtualNetwork object.
+// Returns the implementation_strategy from the NetworkClass (only populated on Create).
 func (s *PrivateVirtualNetworksServer) validateVirtualNetwork(ctx context.Context,
-	newVN *privatev1.VirtualNetwork, existingVN *privatev1.VirtualNetwork) error {
+	newVN *privatev1.VirtualNetwork, existingVN *privatev1.VirtualNetwork) (implementationStrategy string, err error) {
 
 	if newVN == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network is mandatory")
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network is mandatory")
+		return
 	}
 
 	spec := newVN.GetSpec()
 	if spec == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network spec is mandatory")
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network spec is mandatory")
+		return
 	}
 
 	// VN-VAL-08: Region is required
 	if spec.GetRegion() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.region' is required")
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.region' is required")
+		return
 	}
 
 	// VN-VAL-03: At least one CIDR must be provided
 	if spec.GetIpv4Cidr() == "" && spec.GetIpv6Cidr() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"at least one of 'spec.ipv4_cidr' or 'spec.ipv6_cidr' must be provided")
+		return
 	}
 
 	// VN-VAL-01: Validate IPv4 CIDR format
 	if spec.GetIpv4Cidr() != "" {
-		if err := validateCIDR(spec.GetIpv4Cidr(), "IPv4"); err != nil {
-			return err
+		if err = validateCIDR(spec.GetIpv4Cidr(), "IPv4"); err != nil {
+			return
 		}
 	}
 
 	// VN-VAL-02: Validate IPv6 CIDR format
 	if spec.GetIpv6Cidr() != "" {
-		if err := validateCIDR(spec.GetIpv6Cidr(), "IPv6"); err != nil {
-			return err
+		if err = validateCIDR(spec.GetIpv6Cidr(), "IPv6"); err != nil {
+			return
 		}
 	}
 
 	// VN-VAL-09, VN-VAL-10: Check immutable fields (only on Update)
-	if err := validateImmutableFields(newVN, existingVN); err != nil {
-		return err
+	if err = validateImmutableFields(newVN, existingVN); err != nil {
+		return
 	}
 
 	// VN-VAL-04, VN-VAL-05, VN-VAL-06: Validate NetworkClass
 	// Only validate on Create or if network_class changed (though it shouldn't on Update)
 	if existingVN == nil || spec.GetNetworkClass() != existingVN.GetSpec().GetNetworkClass() {
-		if err := s.validateNetworkClassReference(ctx, spec); err != nil {
-			return err
+		implementationStrategy, err = s.validateNetworkClassReference(ctx, spec)
+		if err != nil {
+			return
 		}
 	}
 
-	return nil
+	return
 }
 
 // validateCIDR validates a CIDR string and checks if it matches the expected IP version.
@@ -282,12 +299,14 @@ func validateImmutableFields(newVN *privatev1.VirtualNetwork, existingVN *privat
 }
 
 // validateNetworkClassReference validates that the referenced NetworkClass exists and is in READY state.
+// Returns the implementation_strategy from the NetworkClass for storage in VirtualNetwork spec.
 func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context.Context,
-	spec *privatev1.VirtualNetworkSpec) error {
+	spec *privatev1.VirtualNetworkSpec) (implementationStrategy string, err error) {
 
 	networkClassName := spec.GetNetworkClass()
 	if networkClassName == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.network_class' is required")
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.network_class' is required")
+		return
 	}
 
 	// Query NetworkClass by implementation_strategy
@@ -300,22 +319,25 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 		s.logger.ErrorContext(ctx, "Failed to query NetworkClass",
 			slog.String("network_class", networkClassName),
 			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_class")
+		err = grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_class")
+		return
 	}
 
 	items := listResponse.GetItems()
 	if len(items) == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"network_class '%s' does not exist", networkClassName)
+		return
 	}
 
 	networkClass := items[0]
 
 	// VN-VAL-05: Check NetworkClass is READY
 	if networkClass.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		err = grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"network_class '%s' is not in READY state (current state: %s)",
 			networkClassName, networkClass.GetStatus().GetState().String())
+		return
 	}
 
 	// VN-VAL-06: Validate capabilities match
@@ -323,18 +345,23 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 	ncCaps := networkClass.GetCapabilities()
 	if vnCaps != nil && ncCaps != nil {
 		if vnCaps.GetEnableIpv4() && !ncCaps.GetSupportsIpv4() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"network_class '%s' does not support IPv4", networkClassName)
+			return
 		}
 		if vnCaps.GetEnableIpv6() && !ncCaps.GetSupportsIpv6() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"network_class '%s' does not support IPv6", networkClassName)
+			return
 		}
 		if vnCaps.GetEnableDualStack() && !ncCaps.GetSupportsDualStack() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"network_class '%s' does not support dual-stack", networkClassName)
+			return
 		}
 	}
 
-	return nil
+	// Return the implementation_strategy for storage in VirtualNetwork spec
+	implementationStrategy = networkClass.GetImplementationStrategy()
+	return
 }
