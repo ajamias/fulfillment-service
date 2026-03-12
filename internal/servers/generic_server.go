@@ -724,6 +724,12 @@ func (s *GenericServer[O]) setPayload(event *privatev1.Event, object proto.Messa
 		event.SetComputeInstanceTemplate(object)
 	case *privatev1.ComputeInstance:
 		event.SetComputeInstance(object)
+	case *privatev1.NetworkClass:
+		event.SetNetworkClass(object)
+	case *privatev1.VirtualNetwork:
+		event.SetVirtualNetwork(object)
+	case *privatev1.Subnet:
+		event.SetSubnet(object)
 	default:
 		return fmt.Errorf("unknown object type '%T'", object)
 	}
