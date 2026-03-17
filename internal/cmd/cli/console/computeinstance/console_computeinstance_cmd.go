@@ -238,26 +238,10 @@ func (c *runnerContext) connectOnce(ctx context.Context, instanceID string) erro
 	}
 
 	// Wait for connected status.
-	for {
-		resp, err := stream.Recv()
-		if err != nil {
-			return err
-		}
-
-		if st := resp.GetStatus(); st != nil {
-			switch st.GetState() {
-			case publicv1.ConsoleConnectionState_CONSOLE_CONNECTION_STATE_CONNECTED:
-				fmt.Fprintf(os.Stderr, "Connected to %s. Disconnect: Ctrl+] or Enter ~.\n", instanceID)
-				goto connected
-			case publicv1.ConsoleConnectionState_CONSOLE_CONNECTION_STATE_CONNECTING:
-				fmt.Fprintf(os.Stderr, "%s\n", st.GetMessage())
-			case publicv1.ConsoleConnectionState_CONSOLE_CONNECTION_STATE_ERROR:
-				return fmt.Errorf("server error: %s", st.GetMessage())
-			}
-		}
+	if err := c.waitForConnected(stream, instanceID); err != nil {
+		return err
 	}
 
-connected:
 	// Set terminal to raw mode.
 	fd := int(os.Stdin.Fd())
 	if term.IsTerminal(fd) {
@@ -274,6 +258,28 @@ connected:
 		return fmt.Errorf("%w: %v", errConnectionLost, err)
 	}
 	return nil
+}
+
+// waitForConnected receives status messages until the server reports CONNECTED.
+func (c *runnerContext) waitForConnected(stream grpc.BidiStreamingClient[publicv1.ConsoleConnectRequest, publicv1.ConsoleConnectResponse], instanceID string) error {
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+
+		if st := resp.GetStatus(); st != nil {
+			switch st.GetState() {
+			case publicv1.ConsoleConnectionState_CONSOLE_CONNECTION_STATE_CONNECTED:
+				fmt.Fprintf(os.Stderr, "Connected to %s. Disconnect: Ctrl+] or Enter ~.\n", instanceID)
+				return nil
+			case publicv1.ConsoleConnectionState_CONSOLE_CONNECTION_STATE_CONNECTING:
+				fmt.Fprintf(os.Stderr, "%s\n", st.GetMessage())
+			case publicv1.ConsoleConnectionState_CONSOLE_CONNECTION_STATE_ERROR:
+				return fmt.Errorf("server error: %s", st.GetMessage())
+			}
+		}
+	}
 }
 
 // proxyIO handles bidirectional I/O between the terminal and the gRPC stream.

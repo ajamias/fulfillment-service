@@ -131,8 +131,17 @@ func (b *kubeVirtBackend) Connect(ctx context.Context, target Target) (io.ReadWr
 	}
 
 	// Add authentication headers from the REST config.
+	// TODO: Currently only BearerToken is supported. If hub kubeconfigs use
+	// BearerTokenFile, ExecProvider, or client certificates, the WebSocket
+	// connection will be unauthenticated. To support all auth methods, use
+	// k8s.io/client-go/transport.New() to build a round-tripper from the
+	// REST config and extract the headers.
 	if config.BearerToken != "" {
 		wsConfig.Header.Set("Authorization", "Bearer "+config.BearerToken)
+	} else {
+		b.logger.WarnContext(ctx, "Hub REST config has no BearerToken; WebSocket connection may be unauthenticated",
+			slog.String("hub", target.HubID),
+		)
 	}
 
 	conn, err := websocket.DialConfig(wsConfig)

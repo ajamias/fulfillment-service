@@ -101,7 +101,7 @@ var _ = Describe("Auto-reconnect", func() {
 		testSrv := &testConsoleServer{failFirst: 2}
 		addr, cleanup, err := startTestGRPCServer(testSrv)
 		Expect(err).NotTo(HaveOccurred())
-		defer cleanup()
+		DeferCleanup(cleanup)
 
 		conn, err := grpc.NewClient(addr,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -139,7 +139,7 @@ var _ = Describe("Auto-reconnect", func() {
 		permanentSrv := &publicv1.UnimplementedConsoleServer{}
 		addr, cleanup, err := startTestGRPCServer(permanentSrv)
 		Expect(err).NotTo(HaveOccurred())
-		defer cleanup()
+		DeferCleanup(cleanup)
 
 		conn, err := grpc.NewClient(addr,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -162,7 +162,7 @@ var _ = Describe("Auto-reconnect", func() {
 		testSrv := &testConsoleServer{failFirst: 2}
 		addr, cleanup, err := startTestGRPCServer(testSrv)
 		Expect(err).NotTo(HaveOccurred())
-		defer cleanup()
+		DeferCleanup(cleanup)
 
 		conn, err := grpc.NewClient(addr,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -191,7 +191,7 @@ var _ = Describe("connectOnce edge cases", func() {
 		eofSrv := &eofAfterConnectServer{}
 		addr, cleanup, err := startTestGRPCServer(eofSrv)
 		Expect(err).NotTo(HaveOccurred())
-		defer cleanup()
+		DeferCleanup(cleanup)
 
 		conn, err := grpc.NewClient(addr,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),

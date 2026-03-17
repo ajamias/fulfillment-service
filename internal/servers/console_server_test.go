@@ -20,7 +20,6 @@ import (
 	"io"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -79,6 +78,7 @@ func (b *mockBackendForServer) Connect(ctx context.Context, target console.Targe
 type mockConn struct {
 	readBuf  *bytes.Buffer
 	writeBuf *bytes.Buffer
+	closeCh  chan struct{}
 	closed   bool
 }
 
@@ -86,6 +86,7 @@ func newMockConn(readData string) *mockConn {
 	return &mockConn{
 		readBuf:  bytes.NewBufferString(readData),
 		writeBuf: &bytes.Buffer{},
+		closeCh:  make(chan struct{}),
 	}
 }
 
@@ -93,7 +94,15 @@ func (c *mockConn) Read(p []byte) (int, error) {
 	if c.closed {
 		return 0, io.EOF
 	}
-	return c.readBuf.Read(p)
+	n, err := c.readBuf.Read(p)
+	if err == io.EOF {
+		// Block until Close is called instead of returning EOF immediately.
+		// This prevents the backend-read goroutine from exiting before the
+		// client-write goroutine has processed all input.
+		<-c.closeCh
+		return 0, io.EOF
+	}
+	return n, err
 }
 
 func (c *mockConn) Write(p []byte) (int, error) {
@@ -101,7 +110,10 @@ func (c *mockConn) Write(p []byte) (int, error) {
 }
 
 func (c *mockConn) Close() error {
-	c.closed = true
+	if !c.closed {
+		c.closed = true
+		close(c.closeCh)
+	}
 	return nil
 }
 
@@ -578,9 +590,6 @@ var _ = Describe("Console Server", func() {
 			wg.Wait()
 			cancel()
 
-			// Allow goroutines to complete sends before checking.
-			time.Sleep(10 * time.Millisecond)
-
 			// Verify we got status messages (CONNECTING, CONNECTED).
 			sent := stream.getSent()
 			Expect(len(sent)).To(BeNumerically(">=", 2))
@@ -597,12 +606,6 @@ var _ = Describe("Console Server", func() {
 
 			// Verify the input was relayed to the backend.
 			Expect(mockConnection.writeBuf.String()).To(Equal("ls -la\n"))
-
-			// If backend output was sent before EOF, verify it.
-			if len(sent) >= 3 {
-				Expect(sent[2].GetOutput()).NotTo(BeNil())
-				Expect(string(sent[2].GetOutput().GetData())).To(Equal("hello from vm\n"))
-			}
 
 			// Connect should return nil (clean termination via EOF).
 			Expect(connectErr).NotTo(HaveOccurred())

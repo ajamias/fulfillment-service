@@ -145,11 +145,14 @@ func (m *Manager) ActiveSessions() int {
 	return len(m.sessions)
 }
 
-// DrainSessions cancels all active sessions and waits for them to close.
-func (m *Manager) DrainSessions() {
+// CancelSessions cancels all active session contexts, causing their proxy
+// goroutines to shut down asynchronously. It does not wait for the goroutines
+// to finish — callers should allow a grace period for in-flight operations
+// (e.g., sending disconnect status messages) to complete.
+func (m *Manager) CancelSessions() {
 	m.sessionsLock.Lock()
 	for key, s := range m.sessions {
-		m.logger.Info("Draining console session",
+		m.logger.Info("Cancelling console session",
 			slog.String("resource", key),
 			slog.String("user", s.user),
 		)

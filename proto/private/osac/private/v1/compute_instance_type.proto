@@ -88,8 +88,6 @@ message ComputeInstanceStatus {
   string hub = 4;
 
   optional google.protobuf.Timestamp last_restarted_at = 5;
-
-  reserved 6;
 }
 
 enum ComputeInstanceState {

@@ -261,11 +261,17 @@ func (s *consoleServer) proxy(ctx context.Context, stream publicv1.Console_Conne
 		}
 	}()
 
-	// Close the backend connection when context expires (e.g., session timeout).
-	// This unblocks the read goroutine which would otherwise hang forever.
+	// Close the backend connection when context expires (e.g., session timeout)
+	// or when the proxy returns. This unblocks the read goroutine which would
+	// otherwise hang forever.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		conn.Close()
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
 	}()
 
 	// Wait for either direction to finish.
@@ -317,7 +323,12 @@ func (s *consoleServer) resolveComputeInstance(ctx context.Context, id string) (
 		Id: id,
 	}.Build())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "compute instance %q not found: %v", id, err)
+		// Preserve the original gRPC status code if available (e.g., Internal for DB
+		// errors, Unavailable for transient failures) so clients can retry appropriately.
+		if st, ok := status.FromError(err); ok {
+			return nil, status.Errorf(st.Code(), "failed to get compute instance %q: %v", id, st.Message())
+		}
+		return nil, status.Errorf(codes.Internal, "failed to get compute instance %q: %v", id, err)
 	}
 
 	ci := resp.GetObject()

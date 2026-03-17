@@ -281,7 +281,7 @@ var _ = Describe("Manager", func() {
 		})
 	})
 
-	Describe("DrainSessions", func() {
+	Describe("CancelSessions", func() {
 		It("should cancel all active sessions", func() {
 			ctx := context.Background()
 			target1 := Target{ResourceType: "compute_instance", ResourceID: "vm-1"}
@@ -294,7 +294,7 @@ var _ = Describe("Manager", func() {
 
 			Expect(mgr.ActiveSessions()).To(Equal(2))
 
-			mgr.DrainSessions()
+			mgr.CancelSessions()
 
 			conn1.Close()
 			conn2.Close()
