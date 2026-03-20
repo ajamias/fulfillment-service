@@ -25,7 +25,7 @@ import (
 
 func TestCollections(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Collections")
+	RunSpecs(t, "Collections package")
 }
 
 // Logger used for tests:

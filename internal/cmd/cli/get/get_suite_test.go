@@ -25,7 +25,7 @@ import (
 
 func TestGet(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Get")
+	RunSpecs(t, "Get command")
 }
 
 var logger *slog.Logger

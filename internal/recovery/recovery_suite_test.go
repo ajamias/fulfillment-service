@@ -25,7 +25,7 @@ import (
 
 func TestRecovery(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Recovery")
+	RunSpecs(t, "Recovery package")
 }
 
 // Logger used for tests:

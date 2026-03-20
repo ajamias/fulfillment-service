@@ -26,7 +26,7 @@ import (
 
 func TestDatabase(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Database")
+	RunSpecs(t, "Database package")
 }
 
 var (

@@ -27,7 +27,7 @@ import (
 
 func TestServers(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Servers")
+	RunSpecs(t, "Servers package")
 }
 
 var (

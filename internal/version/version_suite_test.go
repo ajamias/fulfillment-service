@@ -25,7 +25,7 @@ import (
 
 func TestVersion(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Version")
+	RunSpecs(t, "Version package")
 }
 
 var logger *slog.Logger

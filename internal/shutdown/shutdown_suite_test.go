@@ -25,7 +25,7 @@ import (
 
 func TestShutdown(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Shutdown")
+	RunSpecs(t, "Shutdown package")
 }
 
 var logger *slog.Logger

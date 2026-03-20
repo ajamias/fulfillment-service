@@ -24,7 +24,7 @@ import (
 
 func TestConsoleComputeInstance(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Console ComputeInstance")
+	RunSpecs(t, "Console command")
 }
 
 // Logger used for tests:

@@ -26,7 +26,7 @@ import (
 
 func TestLogging(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Logging")
+	RunSpecs(t, "Logging package")
 }
 
 var _ = BeforeSuite(func() {

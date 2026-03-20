@@ -26,7 +26,7 @@ import (
 
 func TestTerminal(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Terminal")
+	RunSpecs(t, "Terminal package")
 }
 
 var logger *slog.Logger

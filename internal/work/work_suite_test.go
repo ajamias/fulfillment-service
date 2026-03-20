@@ -12,7 +12,7 @@ import (
 
 func TestWork(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Work")
+	RunSpecs(t, "Work package")
 }
 
 // Logger used for tests:

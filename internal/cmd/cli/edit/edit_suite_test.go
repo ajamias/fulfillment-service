@@ -22,5 +22,5 @@ import (
 
 func TestEdit(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Edit")
+	RunSpecs(t, "Edit command")
 }

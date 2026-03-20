@@ -25,7 +25,7 @@ import (
 
 func TestHealth(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Health")
+	RunSpecs(t, "Health package")
 }
 
 // Logger used for tests:

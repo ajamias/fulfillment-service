@@ -25,7 +25,7 @@ import (
 
 func TestMasks(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Masks")
+	RunSpecs(t, "Masks package")
 }
 
 var (

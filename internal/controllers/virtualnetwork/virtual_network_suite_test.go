@@ -24,7 +24,7 @@ import (
 
 func TestVirtualNetwork(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "VirtualNetwork")
+	RunSpecs(t, "Virtual network controller")
 }
 
 // Logger used for tests:

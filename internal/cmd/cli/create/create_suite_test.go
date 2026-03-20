@@ -22,5 +22,5 @@ import (
 
 func TestCreate(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Create")
+	RunSpecs(t, "Create command")
 }

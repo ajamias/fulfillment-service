@@ -25,7 +25,7 @@ import (
 
 func TestReflection(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Reflection")
+	RunSpecs(t, "Reflection package")
 }
 
 var logger *slog.Logger

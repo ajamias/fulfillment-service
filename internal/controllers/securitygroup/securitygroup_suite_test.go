@@ -24,7 +24,7 @@ import (
 
 func TestSecurityGroup(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "SecurityGroup")
+	RunSpecs(t, "Security group controller")
 }
 
 // Logger used for tests:

@@ -25,7 +25,7 @@ import (
 
 func TestOAuth(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "OAuth")
+	RunSpecs(t, "OAuth package")
 }
 
 var logger *slog.Logger

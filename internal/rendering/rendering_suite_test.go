@@ -25,7 +25,7 @@ import (
 
 func TestRendering(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Rendering")
+	RunSpecs(t, "Rendering package")
 }
 
 // Logger used for tests:

@@ -24,7 +24,7 @@ import (
 
 func TestMetrics(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Metrics")
+	RunSpecs(t, "Metrics package")
 }
 
 // Logger used for tests:

@@ -23,7 +23,7 @@ import (
 
 func TestJQ(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "JQ")
+	RunSpecs(t, "JQ package")
 }
 
 // Logger used for tests:

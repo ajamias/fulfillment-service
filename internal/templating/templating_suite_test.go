@@ -25,7 +25,7 @@ import (
 
 func TestTemplating(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Templating")
+	RunSpecs(t, "Templating package")
 }
 
 var logger *slog.Logger

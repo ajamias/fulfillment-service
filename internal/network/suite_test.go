@@ -25,7 +25,7 @@ import (
 
 func TestNetwork(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Network")
+	RunSpecs(t, "Network package")
 }
 
 // Logger used for tests:

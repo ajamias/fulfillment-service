@@ -23,7 +23,7 @@ import (
 
 func TestConsole(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Console")
+	RunSpecs(t, "Console package")
 }
 
 // Logger used for tests:

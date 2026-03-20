@@ -25,7 +25,7 @@ import (
 
 func TestJSON(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "JSON")
+	RunSpecs(t, "JSON package")
 }
 
 var logger *slog.Logger

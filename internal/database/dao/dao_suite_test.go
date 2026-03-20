@@ -30,7 +30,7 @@ import (
 
 func TestDAO(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "DAO")
+	RunSpecs(t, "DAO package")
 }
 
 var (

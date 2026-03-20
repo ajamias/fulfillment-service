@@ -24,7 +24,7 @@ import (
 
 func TestSubnet(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Subnet")
+	RunSpecs(t, "Subnet controller")
 }
 
 // Logger used for tests:
