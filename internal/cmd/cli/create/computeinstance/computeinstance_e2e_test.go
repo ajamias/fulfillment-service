@@ -20,7 +20,9 @@ import (
 	. "github.com/onsi/gomega"
 	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/osac-project/fulfillment-service/internal/testing"
 )
@@ -151,5 +153,6 @@ var _ = Describe("Compute Instance E2E", func() {
 			Id: createdID,
 		})
 		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
 	})
 })

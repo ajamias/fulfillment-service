@@ -81,11 +81,11 @@ func LoadComputeInstanceScenarioFromFile(filename string) (*ComputeInstanceScena
 		return nil, fmt.Errorf("failed to parse scenario YAML: %w", err)
 	}
 
-	return file.toScenario(), nil
+	return file.toScenario()
 }
 
 // toScenario converts a computeInstanceScenarioFile to a ComputeInstanceScenario with proper proto enums
-func (f *computeInstanceScenarioFile) toScenario() *ComputeInstanceScenario {
+func (f *computeInstanceScenarioFile) toScenario() (*ComputeInstanceScenario, error) {
 	scenario := &ComputeInstanceScenario{
 		Name:        f.Name,
 		Description: f.Description,
@@ -103,16 +103,20 @@ func (f *computeInstanceScenarioFile) toScenario() *ComputeInstanceScenario {
 	}
 
 	for i, inst := range f.Instances {
+		rawState, ok := publicv1.ComputeInstanceState_value[inst.State]
+		if !ok {
+			return nil, fmt.Errorf("invalid compute instance state %q for instance %q", inst.State, inst.ID)
+		}
 		scenario.Instances[i] = &InstanceData{
 			ID:        inst.ID,
 			Name:      inst.Name,
 			Template:  inst.Template,
-			State:     publicv1.ComputeInstanceState(publicv1.ComputeInstanceState_value[inst.State]),
+			State:     publicv1.ComputeInstanceState(rawState),
 			IPAddress: inst.IPAddress,
 		}
 	}
 
-	return scenario
+	return scenario, nil
 }
 
 // ToProtoTemplate converts TemplateData to a proto ComputeInstanceTemplate

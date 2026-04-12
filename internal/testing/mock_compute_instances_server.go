@@ -151,14 +151,16 @@ func (s *MockComputeInstanceTemplatesServer) Get(ctx context.Context, request *p
 }
 
 // List lists compute instance templates, with basic filter support.
-// Supports the CEL filter pattern used by the CLI: this.id == "X" || this.metadata.name == "X"
+// Matches quoted literal values from CEL filters like: this.id == "X" || this.metadata.name == "X"
 func (s *MockComputeInstanceTemplatesServer) List(ctx context.Context, request *publicv1.ComputeInstanceTemplatesListRequest) (*publicv1.ComputeInstanceTemplatesListResponse, error) {
 	filter := request.GetFilter()
 	var templates []*publicv1.ComputeInstanceTemplate
 	for _, templateData := range s.scenario.Templates {
 		if filter != "" {
-			// Basic filter: check if the filter contains the template's ID or name
-			if !strings.Contains(filter, templateData.ID) && !strings.Contains(filter, templateData.Name) {
+			// Match quoted literal values from the CEL filter expression
+			matchesID := strings.Contains(filter, fmt.Sprintf("%q", templateData.ID))
+			matchesName := strings.Contains(filter, fmt.Sprintf("%q", templateData.Name))
+			if !matchesID && !matchesName {
 				continue
 			}
 		}
