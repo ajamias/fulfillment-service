@@ -130,6 +130,17 @@ Tests use Ginkgo v2 + Gomega. Typical suite setup in `*_suite_test.go`:
 - `DeferCleanup` for teardown
 - `dao.CreateTables[T]()` dynamically creates test schemas
 
+## Claude Code Hooks
+
+Hooks are configured in `.claude/settings.json` and run automatically during Claude Code sessions:
+
+- **Proto changes** (`PostToolUse`): When a `.proto` file is edited, `buf lint && buf generate` runs automatically to keep generated Go code in sync.
+- **Go module changes** (`PostToolUse`): When `go.mod` is edited, `go mod tidy` runs automatically.
+- **Pre-commit** (`PreToolUse`): `buf lint` runs before every `git commit` to catch proto issues early.
+- **Pre-PR** (`PreToolUse`): `buf lint && ginkgo run -r internal` runs before `gh pr create` to ensure tests pass.
+
+To replicate this setup in another OSAC repo, copy `.claude/settings.json` and adjust the commands as needed.
+
 ## Common Pitfalls
 
 - Proto changes require both `buf lint` and `buf generate` before committing
